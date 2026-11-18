@@ -23,3 +23,5 @@ playwright-report/
 .vscode/
 backups/
 benchmark-results*.json
+
+frontend-build-log.txt
