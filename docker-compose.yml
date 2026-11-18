@@ -1,0 +1,123 @@
+name: linkforge
+
+x-backend-environment: &backend-environment
+  ENVIRONMENT: ${ENVIRONMENT:-production}
+  DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-linkforge}:${POSTGRES_PASSWORD:?Run python scripts/setup.py first}@postgres:5432/${POSTGRES_DB:-linkforge}
+  REDIS_URL: redis://:${REDIS_PASSWORD:?Run python scripts/setup.py first}@redis:6379/0
+  JWT_SECRET: ${JWT_SECRET:?Run python scripts/setup.py first}
+  METRICS_TOKEN: ${METRICS_TOKEN:-}
+  PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-http://localhost:8080}
+  CORS_ORIGINS: '${CORS_ORIGINS:-["http://localhost:8080","http://127.0.0.1:8080"]}'
+  TRUSTED_HOSTS: '${TRUSTED_HOSTS:-["localhost","127.0.0.1","api"]}'
+  CACHE_TTL_SECONDS: ${CACHE_TTL_SECONDS:-60}
+  RATE_LIMIT_ENABLED: ${RATE_LIMIT_ENABLED:-true}
+  AUTH_RATE_LIMIT: ${AUTH_RATE_LIMIT:-20}
+  CREATE_RATE_LIMIT: ${CREATE_RATE_LIMIT:-100}
+  ANALYTICS_MODE: ${ANALYTICS_MODE:-stream}
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-linkforge}
+      POSTGRES_DB: ${POSTGRES_DB:-linkforge}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Run python scripts/setup.py first}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    networks: [private]
+
+  redis:
+    image: redis:7.4-alpine
+    restart: unless-stopped
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?Run python scripts/setup.py first}
+    command:
+      - redis-server
+      - --appendonly
+      - "yes"
+      - --appendfsync
+      - everysec
+      - --maxmemory-policy
+      - noeviction
+      - --maxmemory
+      - ${REDIS_MAXMEMORY:-256mb}
+      - --requirepass
+      - ${REDIS_PASSWORD:?Run python scripts/setup.py first}
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli --no-auth-warning -a \"$$REDIS_PASSWORD\" ping | grep -q PONG"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    networks: [private]
+
+  migrate:
+    image: linkforge-api:local
+    build: ./backend
+    command: ["alembic", "upgrade", "head"]
+    environment: *backend-environment
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+    networks: [private]
+
+  api:
+    image: linkforge-api:local
+    build: ./backend
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--proxy-headers", "--forwarded-allow-ips", "*", "--no-access-log"]
+    restart: unless-stopped
+    environment: *backend-environment
+    ports:
+      - "127.0.0.1:${API_PORT:-8000}:8000"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health/ready', timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    networks: [private]
+
+  worker:
+    image: linkforge-api:local
+    build: ./backend
+    command: ["python", "-m", "app.worker"]
+    restart: unless-stopped
+    environment: *backend-environment
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    networks: [private]
+
+  frontend:
+    image: linkforge-web:local
+    build: ./frontend
+    restart: unless-stopped
+    ports:
+      - "${FRONTEND_BIND:-0.0.0.0}:${FRONTEND_PORT:-8080}:80"
+    depends_on:
+      api:
+        condition: service_healthy
+    networks: [private]
+
+volumes:
+  postgres_data:
+  redis_data:
+
+networks:
+  private:
+    driver: bridge
