@@ -4,6 +4,19 @@
 
 Create short links, choose custom aliases, set expiration dates, pause or delete links, and inspect click activity. The project is organized to make the database, cache, authentication, failure handling, and deployment decisions understandable in a system design interview.
 
+
+## Application Screenshots
+
+### Dashboard
+![Linkforge Dashboard](docs/screenshots/dashboard.png)
+
+### Create a Short URL
+![Create a Short URL](docs/screenshots/create-url.png)
+
+### Click Analytics
+![Click Analytics](docs/screenshots/analytics.png)
+  
+
 ## What is included
 
 | Area | Implementation |
